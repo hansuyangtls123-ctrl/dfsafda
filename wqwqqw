@@ -1,0 +1,237 @@
+-- === Rivals Ultimate Cheats - Grok FINAL v12 (UI 로드 안정화) ===
+-- Delta Mobile Optimized | Silent Aim + UI Fixed
+
+local success, Library = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/xHeptc/Kavo-UI-Library/main/source.lua"))()
+end)
+
+if not success or not Library then
+    warn("❌ Kavo UI 로드 실패! Executor에서 HttpGet을 허용했는지 확인하세요.")
+    return
+end
+
+local Window = Library.CreateLib("Rivals Cheats • Grok FINAL v12", "DarkTheme")
+
+local Tab = Window:NewTab("Core Features")
+local Section = Tab:NewSection("Toggles")
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local RunService = game:GetService("RunService")
+
+-- === 모든 기능 기본 OFF ===
+local Wallbang = false
+local AntiVoid = false
+local Aimbot = false
+local AlwaysHit = false
+local ConstantMode = false
+local Teleport = false
+local PrepMovement = false
+local AimFOV = 130
+
+local target = nil
+local connections = {}
+local statusLabels = {}
+local antiVoidConn = nil
+local oldRaycast = workspace.Raycast
+
+-- ==================== FULL CLEANUP ====================
+local function fullCleanup()
+    for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
+    if antiVoidConn then pcall(function() antiVoidConn:Disconnect() end); antiVoidConn = nil end
+    connections = {}
+    pcall(function() workspace.Raycast = oldRaycast end)
+    pcall(function() if fovCircle then fovCircle:Remove() end end)
+    
+    Wallbang = false; AntiVoid = false; Aimbot = false; AlwaysHit = false
+    ConstantMode = false; Teleport = false; PrepMovement = false
+end
+fullCleanup()
+
+-- ==================== BYPASS ====================
+local function setupBypass()
+    pcall(function()
+        local mt = getrawmetatable(game)
+        local oldNamecall = mt.__namecall
+        local oldIndex = mt.__index
+        setreadonly(mt, false)
+
+        mt.__namecall = newcclosure(function(self, ...)
+            local method = getnamecallmethod()
+            local args = {...}
+            if method == "Kick" or method == "kick" then return end
+            if method == "FireServer" then
+                local argStr = tostring(args[1] or ""):lower()
+                local keywords = {"detect", "cheat", "void", "ban", "anticheat", "report", "flag", "kick"}
+                for _, kw in ipairs(keywords) do
+                    if argStr:find(kw) then return end
+                end
+            end
+            return oldNamecall(self, ...)
+        end)
+
+        mt.__index = newcclosure(function(self, key)
+            if key == "Kick" then return nil end
+            return oldIndex(self, key)
+        end)
+        setreadonly(mt, true)
+    end)
+end
+setupBypass()
+
+-- ==================== VISIBILITY & TARGET ====================
+local function isVisible(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("Head") then return false end
+    local head = targetPlayer.Character.Head
+    local origin = Camera.CFrame.Position
+    local direction = (head.Position - origin)
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.IgnoreWater = true
+    local result = workspace:Raycast(origin, direction.Unit * (direction.Magnitude + 10), params)
+    return not result or result.Instance:IsDescendantOf(targetPlayer.Character)
+end
+
+local function getNearestEnemy()
+    local closest, dist = nil, math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+            local hum = plr.Character:FindFirstChild("Humanoid")
+            if hum and hum.Health > 0 then
+                local mag = (plr.Character.Head.Position - Camera.CFrame.Position).Magnitude
+                if mag < AimFOV then
+                    local visible = Wallbang or isVisible(plr)
+                    if visible and mag < dist then
+                        dist = mag
+                        closest = plr
+                    end
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- ==================== SILENT AIM ====================
+workspace.Raycast = newcclosure(function(ws, origin, direction, params)
+    if AlwaysHit and target and target.Character and target.Character:FindFirstChild("Head") then
+        local shouldApply = ConstantMode or Wallbang
+        if shouldApply then
+            local head = target.Character.Head.Position
+            local root = target.Character:FindFirstChild("HumanoidRootPart")
+            local vel = root and root.Velocity or Vector3.new()
+            local distance = (head - origin).Magnitude
+            local predictionFactor = math.clamp(distance / 420, 0.02, 0.1)
+            local predicted = head + vel * predictionFactor
+            local newDir = (predicted - origin).Unit * 2500
+            return oldRaycast(ws, origin, newDir, params)
+        end
+    end
+    return oldRaycast(ws, origin, direction, params)
+end)
+
+-- ==================== TOGGLES ====================
+local function createStatusLabel(name)
+    local label = Section:NewLabel(name .. ": <font color='rgb(255,0,0)'>OFF</font>")
+    statusLabels[name] = label
+end
+
+Section:NewToggle("총알 벽뚫 (Wallbang)", "", function(state)
+    Wallbang = state
+    statusLabels["Wallbang"]:UpdateLabel("총알 벽뚫: " .. (state and "<font color='rgb(0,255,0)'>ON</font>" or "<font color='rgb(255,0,0)'>OFF</font>"))
+end)
+createStatusLabel("Wallbang")
+
+Section:NewToggle("안티보이드 (AntiVoid)", "", function(state)
+    AntiVoid = state
+    statusLabels["AntiVoid"]:UpdateLabel("안티보이드: " .. (state and "<font color='rgb(0,255,0)'>ON</font>" or "<font color='rgb(255,0,0)'>OFF</font>"))
+    if antiVoidConn then antiVoidConn:Disconnect(); antiVoidConn = nil end
+    if state then
+        antiVoidConn = RunService.RenderStepped:Connect(function()
+            pcall(function()
+                local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if root and root.Position.Y < -25 and root.Velocity.Y < -15 then
+                    root.Velocity = Vector3.new(root.Velocity.X, 55, root.Velocity.Z)
+                    root.CFrame = root.CFrame + Vector3.new(0, 8, 0)
+                end
+            end)
+        end)
+        table.insert(connections, antiVoidConn)
+    end
+end)
+createStatusLabel("AntiVoid")
+
+Section:NewToggle("에임봇 (Aimbot)", "", function(state)
+    Aimbot = state
+    statusLabels["Aimbot"]:UpdateLabel("에임봇: " .. (state and "<font color='rgb(0,255,0)'>ON</font>" or "<font color='rgb(255,0,0)'>OFF</font>"))
+end)
+createStatusLabel("Aimbot")
+
+Section:NewToggle("반드시 명중 (Silent Aim)", "", function(state)
+    AlwaysHit = state
+    statusLabels["AlwaysHit"]:UpdateLabel("반드시 명중: " .. (state and "<font color='rgb(0,255,0)'>ON</font>" or "<font color='rgb(255,0,0)'>OFF</font>"))
+end)
+createStatusLabel("AlwaysHit")
+
+Section:NewToggle("상시 치트 작동", "총 안 쏠 때도 적용", function(state)
+    ConstantMode = state
+    statusLabels["ConstantMode"]:UpdateLabel("상시 치트 작동: " .. (state and "<font color='rgb(0,255,0)'>ON</font>" or "<font color='rgb(255,0,0)'>OFF</font>"))
+end)
+createStatusLabel("ConstantMode")
+
+Section:NewToggle("텔레포트", "상대 머리 바로 위로 순간이동", function(state)
+    Teleport = state
+    statusLabels["Teleport"]:UpdateLabel("텔레포트: " .. (state and "<font color='rgb(0,255,0)'>ON</font>" or "<font color='rgb(255,0,0)'>OFF</font>"))
+end)
+createStatusLabel("Teleport")
+
+Section:NewToggle("준비시간 움직이기", "게임 시작 전 이동 가능", function(state)
+    PrepMovement = state
+    statusLabels["PrepMovement"]:UpdateLabel("준비시간 움직이기: " .. (state and "<font color='rgb(0,255,0)'>ON</font>" or "<font color='rgb(255,0,0)'>OFF</font>"))
+end)
+createStatusLabel("PrepMovement")
+
+-- ==================== MAIN LOOP ====================
+local fovCircle = Drawing.new("Circle")
+fovCircle.Thickness = 1.5
+fovCircle.NumSides = 48
+fovCircle.Radius = AimFOV
+fovCircle.Filled = false
+fovCircle.Transparency = 0.7
+fovCircle.Color = Color3.fromRGB(0, 255, 120)
+
+RunService.RenderStepped:Connect(function()
+    pcall(function()
+        fovCircle.Position = Camera.ViewportSize / 2
+        fovCircle.Visible = (Aimbot or AntiVoid or AlwaysHit or Teleport)
+        
+        target = getNearestEnemy()
+        
+        if Aimbot and target and target.Character and target.Character:FindFirstChild("Head") then
+            Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, target.Character.Head.Position)
+        end
+        
+        if Teleport and target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                local headPos = target.Character.HumanoidRootPart.Position
+                root.Velocity = (headPos + Vector3.new(0, 5, 0) - root.Position) * 12
+                root.CFrame = CFrame.new(headPos + Vector3.new(0, 5, 0))
+            end
+        end
+        
+        if PrepMovement then
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("Humanoid") then
+                char.Humanoid.WalkSpeed = 16
+                char.Humanoid.JumpPower = 50
+            end
+        end
+    end)
+end)
+
+LocalPlayer.CharacterRemoving:Connect(fullCleanup)
+
+print("✅ UI 및 Silent Aim 로드 완료")
